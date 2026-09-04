@@ -30,6 +30,7 @@
 .footer{font-size:10px;color:#8393a4;margin-top:20px}
 @media(max-width:900px){.side{width:72px}.brand div:not(.mark),.brand small,.nav span,.navtitle,.badge{display:none}.nav{justify-content:center}.main{margin-left:72px;width:calc(100% - 72px)}.top{padding:0 18px}.content{padding:22px 16px}.cards{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}}
 @media(max-width:560px){.cards,.riskbox{grid-template-columns:1fr}.detailgrid{grid-template-columns:1fr}.top .crumb{display:none}.content{padding:18px 12px}h1{font-size:23px}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -76,13 +77,13 @@
 </section>
 
 <section id="anomalies" class="page">
-<h1>Anomaly Center</h1><div class="sub">Flags are derived directly from the anomaly/data-quality columns present in the Excel sheet.</div>
+<h1>Anomaly Center</h1><div class="sub">Flags are generated dynamically by the backend anomaly detection service (peer extreme allocations & repeated amount patterns).</div>
 <div class="riskbox">
-<div class="risk"><small>Missing recommended date</small><strong id="missingDate"></strong></div>
-<div class="risk"><small>Missing amount</small><strong id="missingAmount"></strong></div>
-<div class="risk"><small>Future date / invalid amount</small><strong id="futureInvalid"></strong></div>
+<div class="risk"><small id="card1Label">Repeated amount patterns</small><strong id="missingDate">—</strong></div>
+<div class="risk"><small id="card2Label">Extreme allocations</small><strong id="missingAmount">—</strong></div>
+<div class="risk"><small id="card3Label">Total detected anomalies</small><strong id="futureInvalid">—</strong></div>
 </div>
-<div class="panel"><div class="panelhead"><h2>Flagged records</h2><span class="tiny">Highest-priority rows first</span></div><div class="tablewrap"><table><thead><tr><th>Project</th><th>State</th><th>Amount</th><th>Reason</th><th>Risk</th><th></th></tr></thead><tbody id="anomalyRows"></tbody></table></div></div>
+<div class="panel"><div class="panelhead"><h2>Flagged records</h2><span class="tiny" id="anomalySubtitle">Highest-priority rows first</span></div><div class="tablewrap"><table><thead><tr><th>Project</th><th>State</th><th>Amount</th><th>Reason</th><th>Risk</th><th></th></tr></thead><tbody id="anomalyRows"></tbody></table></div></div>
 </section>
 
 <section id="analytics" class="page">
@@ -132,14 +133,133 @@ function renderProjects(){
  document.getElementById('projectRows').innerHTML=rows.slice(0,100).map(x=>`<tr><td class="work">${esc(x.work)}</td><td>${esc(x.mp)}</td><td>${esc(x.state)}<br><span class="tiny">${esc(x.constituency)}</span></td><td class="amount">${moneyFull(x.amount)}</td><td><span class="pill">${esc(x.status)}</span></td><td>${x.risk?`<span class="pill red">${x.risk} · ${esc(x.anomaly)}</span>`:'<span class="pill">Clean</span>'}</td><td><button class="view" onclick="openModal('${esc(x.id)}')">Details</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">No matching projects.</td></tr>';
  document.getElementById('projectCount').textContent=`Showing ${Math.min(rows.length,100).toLocaleString('en-IN')} of ${rows.length.toLocaleString('en-IN')} matching records.`;
 }
-function renderAnomalies(){
- let rows=activeData().filter(x=>x.risk>0).sort((a,b)=>b.risk-a.risk);
- document.getElementById('anomalyRows').innerHTML=rows.slice(0,150).map(x=>`<tr><td class="work">${esc(x.work)}</td><td>${esc(x.state)}</td><td class="amount">${moneyFull(x.amount)}</td><td>${esc(x.anomaly)}</td><td><span class="pill red">${x.risk}</span></td><td><button class="view" onclick="openModal('${esc(x.id)}')">Details</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">No flagged records in the supplied workbook.</td></tr>';
+const API_BASE = window.API_BASE_URL || (window.location.origin.includes(':8000') ? window.location.origin : 'http://127.0.0.1:8000');
+let REAL_ANOMALIES = null;
+let ANOMALIES_SUMMARY = null;
+let ANOMALY_ERROR = null;
+let IS_FETCHING_ANOMALIES = false;
+
+async function fetchBackendAnomalies(){
+ IS_FETCHING_ANOMALIES = true;
+ ANOMALY_ERROR = null;
+ renderAnomalies();
+ try {
+  const [sumRes, anomRes] = await Promise.all([
+   fetch(`${API_BASE}/api/v1/anomalies/summary`),
+   fetch(`${API_BASE}/api/v1/anomalies?limit=250`)
+  ]);
+  if (!sumRes.ok || !anomRes.ok) {
+   throw new Error(`Summary API: HTTP ${sumRes.status}, Anomalies API: HTTP ${anomRes.status}`);
+  }
+  ANOMALIES_SUMMARY = await sumRes.json();
+  const anomJson = await anomRes.json();
+  REAL_ANOMALIES = anomJson.anomalies || [];
+  IS_FETCHING_ANOMALIES = false;
+  renderAnomalies();
+ } catch (err) {
+  console.error('Error fetching real anomalies:', err);
+  ANOMALY_ERROR = err.message || 'Connection failed';
+  IS_FETCHING_ANOMALIES = false;
+  renderAnomalies();
+ }
 }
-document.getElementById('missingDate').textContent=SUMMARY.missing_date.toLocaleString('en-IN');
-document.getElementById('missingAmount').textContent=SUMMARY.missing_amount.toLocaleString('en-IN');
-document.getElementById('futureInvalid').textContent=(SUMMARY.future+SUMMARY.zero_neg).toLocaleString('en-IN');
-renderProjects();renderAnomalies();
+
+function updateAnomalyBadgesAndCards(){
+ const countEl = document.getElementById('riskBadge');
+ const alertEl = document.getElementById('alerts');
+ const dEl = document.getElementById('missingDate');
+ const aEl = document.getElementById('missingAmount');
+ const fEl = document.getElementById('futureInvalid');
+
+ if (IS_FETCHING_ANOMALIES) {
+  if (dEl) dEl.textContent = '...';
+  if (aEl) aEl.textContent = '...';
+  if (fEl) fEl.textContent = '...';
+  if (countEl) countEl.textContent = '...';
+  if (alertEl) alertEl.textContent = '...';
+  return;
+ }
+ if (ANOMALY_ERROR) {
+  if (dEl) dEl.textContent = '—';
+  if (aEl) aEl.textContent = '—';
+  if (fEl) fEl.textContent = '—';
+  if (countEl) countEl.textContent = '!';
+  if (alertEl) alertEl.textContent = 'Error';
+  return;
+ }
+ if (ANOMALIES_SUMMARY) {
+  if (dEl) dEl.textContent = (ANOMALIES_SUMMARY.repeated_amount_pattern_count || 0).toLocaleString('en-IN');
+  if (aEl) aEl.textContent = (ANOMALIES_SUMMARY.extreme_allocation_count || 0).toLocaleString('en-IN');
+  if (fEl) fEl.textContent = (ANOMALIES_SUMMARY.total_anomalies || 0).toLocaleString('en-IN');
+  if (countEl) countEl.textContent = (ANOMALIES_SUMMARY.total_anomalies || 0).toLocaleString('en-IN');
+  if (alertEl) alertEl.textContent = (ANOMALIES_SUMMARY.total_anomalies || 0).toLocaleString('en-IN');
+ }
+}
+
+function renderAnomalies(){
+ updateAnomalyBadgesAndCards();
+ const tbody = document.getElementById('anomalyRows');
+ if (!tbody) return;
+
+ if (IS_FETCHING_ANOMALIES) {
+  tbody.innerHTML = `<tr><td colspan="6" class="empty" style="padding:32px 16px"><div style="display:inline-flex;align-items:center;gap:8px;font-weight:600;color:var(--blue)"><span style="display:inline-block;animation:spin 1s linear infinite">⏳</span> Loading real anomalies from backend API (${esc(API_BASE)})...</div></td></tr>`;
+  return;
+ }
+
+ if (ANOMALY_ERROR) {
+  tbody.innerHTML = `<tr><td colspan="6" class="empty" style="color:var(--danger);padding:28px 16px">
+   <div style="max-width:560px;margin:auto">
+    <div style="font-weight:700;font-size:14px;margin-bottom:6px">⚠️ Unable to load anomaly records from backend API</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:12px">FastAPI backend at <code>${esc(API_BASE)}</code> did not respond. (${esc(ANOMALY_ERROR)})</div>
+    <button class="view" onclick="fetchBackendAnomalies()">Retry API Connection</button>
+   </div>
+  </td></tr>`;
+  return;
+ }
+
+ if (REAL_ANOMALIES && REAL_ANOMALIES.length > 0) {
+  let rows = REAL_ANOMALIES;
+  if (ACTIVE_HOUSE !== "All") {
+   rows = rows.filter(a => {
+    const p = ALL_DATA.find(r => r.id === a.project_id);
+    return p ? p.house === ACTIVE_HOUSE : true;
+   });
+  }
+
+  if (rows.length === 0) {
+   tbody.innerHTML = `<tr><td colspan="6" class="empty">No anomalies found for the "${esc(ACTIVE_HOUSE)}" filter.</td></tr>`;
+   return;
+  }
+
+  tbody.innerHTML = rows.slice(0, 150).map(a => {
+   const proj = ALL_DATA.find(r => r.id === a.project_id) || {};
+   const workTitle = proj.work || a.work_type || a.project_id;
+   const mpName = a.mp || proj.mp || '';
+   const stateName = a.peer_group?.state || proj.state || 'N/A';
+   const amountVal = a.allocation_amount || proj.amount || 0;
+   const reasonText = a.message || (a.anomaly_type === 'extreme_allocation' ? 'Unusually high allocation compared with peer group' : 'Repeated work allocation pattern');
+   const severityText = a.severity || 'Flagged';
+
+   return `<tr>
+    <td class="work">
+     <b>${esc(workTitle)}</b>
+     <div class="tiny">${esc(a.project_id)}${mpName ? ' · ' + esc(mpName) : ''}</div>
+    </td>
+    <td>${esc(stateName)}</td>
+    <td class="amount">${moneyFull(amountVal)}</td>
+    <td>${esc(reasonText)}</td>
+    <td><span class="pill red">${esc(severityText)}</span></td>
+    <td><button class="view" onclick="openModal('${esc(a.project_id)}')">Details</button></td>
+   </tr>`;
+  }).join('');
+  return;
+ }
+
+ tbody.innerHTML = '<tr><td colspan="6" class="empty">No anomaly records detected by backend.</td></tr>';
+}
+
+renderProjects();
+fetchBackendAnomalies();
 
 document.getElementById('amountStates').innerHTML=STATES.map(x=>`<div class="row"><span>${esc(x.name)}</span><b>${money(x.amount)}</b></div>`).join('');
 document.getElementById('categories').innerHTML=CATS.map(x=>`<div class="row"><span>${esc(x.name)}</span><b>${x.count.toLocaleString('en-IN')}</b></div>`).join('');
@@ -163,8 +283,7 @@ function switchHouse(h){
  document.getElementById('total').textContent=rows.length.toLocaleString('en-IN');
  document.getElementById('amount').textContent=money(rows.reduce((s,x)=>s+x.amount,0));
  document.getElementById('lsCount').textContent=rows.filter(x=>x.house==='Lok Sabha').length.toLocaleString('en-IN');
- document.getElementById('alerts').textContent=rows.filter(x=>x.risk>0).length.toLocaleString('en-IN');
- document.getElementById('riskBadge').textContent=rows.filter(x=>x.risk>0).length;
+ updateAnomalyBadgesAndCards();
  renderProjects(); renderAnomalies(); renderHouseCharts();
 }
 function renderHouseCharts(){
@@ -182,11 +301,43 @@ renderHouseCharts();
 document.querySelectorAll('.nav').forEach(n=>n.onclick=()=>showPage(n.dataset.page));
 
 function openModal(id){
- const x=ALL_DATA.find(r=>r.id===id); if(!x)return;
- document.getElementById('mTitle').textContent=x.work;
- document.getElementById('mSub').textContent=`${x.id} · ${x.status}`;
- const vals=[['MP',x.mp],['House',x.house],['State',x.state],['Constituency',x.constituency],['District / IDA',x.district],['City',x.city],['Ward',x.ward],['Block',x.block],['Village',x.village],['Recommended date',x.date||'Not available'],['Allocation',moneyFull(x.amount)],['Risk / anomaly',x.risk?`${x.risk} — ${x.anomaly}`:'No flagged anomaly']];
- document.getElementById('details').innerHTML=vals.map(([k,v])=>`<div class="detail"><label>${esc(k)}</label><b>${esc(v)}</b></div>`).join('');
+ const a = (REAL_ANOMALIES || []).find(r => r.project_id === id);
+ const x = ALL_DATA.find(r => r.id === id);
+ if (!x && !a) return;
+ document.getElementById('mTitle').textContent = (x ? x.work : (a.work_type || a.project_id));
+ document.getElementById('mSub').textContent = `${id} · ${a ? (a.anomaly_type.replace(/_/g, ' ') + ' (' + a.severity + ')') : (x ? x.status : '')}`;
+ const vals = [];
+ if (x) {
+  vals.push(['MP', x.mp]);
+  vals.push(['House', x.house]);
+  vals.push(['State', x.state]);
+  vals.push(['Constituency', x.constituency]);
+  vals.push(['District / IDA', x.district]);
+  vals.push(['City', x.city]);
+  vals.push(['Ward', x.ward]);
+  vals.push(['Block', x.block]);
+  vals.push(['Village', x.village]);
+  vals.push(['Recommended date', x.date || 'Not available']);
+  vals.push(['Allocation', moneyFull(x.amount)]);
+ }
+ if (a) {
+  vals.push(['Anomaly Detection', a.anomaly_type.replace(/_/g, ' ')]);
+  vals.push(['Severity', a.severity]);
+  vals.push(['Verification Flag', a.result || 'Requires verification']);
+  vals.push(['Reason / Evidence', a.message]);
+  if (a.pattern_score !== undefined) vals.push(['Pattern Score', `${a.pattern_score} / 100`]);
+  if (a.matching_projects) vals.push(['Matching Projects', `${a.matching_projects} works`]);
+  if (a.different_locations) vals.push(['Locations Count', `${a.different_locations} locations`]);
+  if (a.peer_group) vals.push(['Peer Group', `${a.peer_group.state} · ${a.peer_group.category} (${a.peer_group.size} projects)`]);
+  if (a.peer_median) vals.push(['Peer Median', moneyFull(a.peer_median)]);
+  if (a.peer_median_ratio) vals.push(['Ratio vs Peer Median', `${a.peer_median_ratio}x`]);
+  if (a.robust_z_score !== undefined && a.robust_z_score !== null) vals.push(['Robust Z-Score', String(a.robust_z_score)]);
+  if (a.percentile !== undefined) vals.push(['Percentile', `${a.percentile}%`]);
+  if (a.locations && a.locations.length) vals.push(['Location Cluster', a.locations.slice(0, 5).join('; ')]);
+ } else if (x) {
+  vals.push(['Risk / anomaly', 'No statistical anomaly detected']);
+ }
+ document.getElementById('details').innerHTML = vals.map(([k,v]) => `<div class="detail"><label>${esc(k)}</label><b>${esc(v)}</b></div>`).join('');
  document.getElementById('modal').classList.add('show');
 }
 function closeModal(){document.getElementById('modal').classList.remove('show')}

@@ -15,12 +15,13 @@ MPLADS Monitoring / Anomaly Detection Hackathon Project
 - Relevant branches/commits inspected
 - Checkpoint 0: Project handoff system & rules established
 - Checkpoint 1: Backend verified, cached data loading enabled, cache_clear bug fixed, CORS expanded, anomaly endpoints tested live
+- Checkpoint 2: Connected existing Anomaly UI in `frontend/index2.html` to real backend API endpoints (`/api/v1/anomalies`, `/api/v1/anomalies/summary`) with loading, empty, error, and modal states
 
 ## CURRENT CHECKPOINT
-Checkpoint 1
+Checkpoint 2
 
 ## NEXT CHECKPOINT
-Checkpoint 2 — Connect frontend dashboard and anomaly UI to backend API
+Checkpoint 3 — Decouple hardcoded `ALL_DATA` & connect Project Explorer and Dashboard overview to backend APIs
 
 ---
 
@@ -152,110 +153,88 @@ The anomaly endpoints are implemented in [`backend/app/api/v1/routes/anomalies.p
 
 ## Frontend Dashboard
 - **File**: [`frontend/index2.html`](file:///c:/Users/keert/Hackathon/Hackathon-Project/frontend/index2.html)
-- **Technology**: Vanilla HTML5, CSS3, and JavaScript in a single file (~2.76 MB). Typography uses Google Fonts (*DM Sans* and *Manrope*).
+- **Technology**: Vanilla HTML5, CSS3, and JavaScript in a single file. Typography uses Google Fonts (*DM Sans* and *Manrope*).
 - **Navigation & Views**:
   - **▦ Dashboard (`#dashboard`)**: Summary cards (Total projects, Sanctioned amount, Lok Sabha count, Data-quality alerts), State distribution bar chart, House split, Recent project records table.
   - **▤ Project Explorer (`#projects`)**: Search input, state filter, house filter, risk filter dropdowns, paginated project table, and row counter.
-  - **⚠ Anomaly Center (`#anomalies`)**: Flagged records table and KPI summary cards.
+  - **⚠ Anomaly Center (`#anomalies`)**: Flagged records table and KPI summary cards connected directly to the backend anomaly API.
   - **◫ Analytics (`#analytics`)**: Top states by sanctioned amount, project categories breakdown, and workbook profile metrics.
-  - **Detail Modal (`#modal`)**: Pop-up inspector for individual project record attributes.
+  - **Detail Modal (`#modal`)**: Pop-up inspector displaying unified project attributes and statistical anomaly metrics (severity, pattern scores, peer ratios, location clusters).
   - **Top Bar**: Lok Sabha / Rajya Sabha / All toggle.
 
 ---
 
-## Anomaly UI
-- **Location**: Tab `<section id="anomalies" class="page">` in [`frontend/index2.html`](file:///c:/Users/keert/Hackathon/Hackathon-Project/frontend/index2.html#L78-L86).
-- **Key UI Elements**:
-  - Metric summary cards:
-    - Missing recommended date (`#missingDate`)
-    - Missing amount (`#missingAmount`)
-    - Future date / invalid amount (`#futureInvalid`)
-  - Anomaly Table:
-    - Table tbody `#anomalyRows` rendered by `renderAnomalies()`.
-    - Columns: Project, State, Amount, Reason, Risk pill, and Details button.
-  - Navigation Indicator:
-    - Live count badge `#riskBadge` on the sidebar navigation button.
-
----
-
-## Mock/Hardcoded Frontend Data
-- **Location**: Script block in [`frontend/index2.html`](file:///c:/Users/keert/Hackathon/Hackathon-Project/frontend/index2.html#L101-L148).
-- **Embedded Static Constants**:
-  - `ALL_DATA`: An inlined JavaScript array containing all 5,816 project JSON objects (~2.76 MB of HTML file size).
-  - Anomaly flags in `ALL_DATA`: Currently contains static flags derived directly from workbook data-cleaning columns (`"risk": 25, "anomaly": "Missing date"` or `"risk": 0, "anomaly": "No flagged anomaly"`).
-  - `SUMMARY`: Precomputed static totals (`missing_date: 4035`, `missing_amount: 0`, `zero_neg: 0`, `future: 0`, `critical: 0`, etc.).
-  - `STATES` and `CATS`: Precomputed static category and state arrays.
-- **Network Calls**: Currently operates in-memory; will be connected to the FastAPI endpoints in Checkpoint 2.
+## Anomaly UI & API Integration
+- **Location**: Section `<section id="anomalies" class="page">` in [`frontend/index2.html`](file:///c:/Users/keert/Hackathon/Hackathon-Project/frontend/index2.html#L78-L86).
+- **API Endpoints Used**:
+  - `GET /api/v1/anomalies/summary`: Populates KPI summary cards, sidebar navigation badge, and overview alerts.
+  - `GET /api/v1/anomalies?limit=250`: Populates the flagged records table.
+- **Data Mapping**:
+  - Card 1 (`#missingDate`): Displays `ANOMALIES_SUMMARY.repeated_amount_pattern_count` (e.g. 4,466).
+  - Card 2 (`#missingAmount`): Displays `ANOMALIES_SUMMARY.extreme_allocation_count` (e.g. 631).
+  - Card 3 (`#futureInvalid`): Displays `ANOMALIES_SUMMARY.total_anomalies` (e.g. 5,097).
+  - Sidebar Badge (`#riskBadge`): Real-time total count `ANOMALIES_SUMMARY.total_anomalies` (e.g. 5,097).
+  - Overview Card (`#alerts`): Real-time total count `ANOMALIES_SUMMARY.total_anomalies` (e.g. 5,097).
+  - Table Rows (`#anomalyRows`):
+    - **Project**: Work name (`proj.work || a.work_type || a.project_id`) + subtitle (`a.project_id · a.mp`).
+    - **State**: Peer group state or record state (`a.peer_group?.state || proj.state || 'N/A'`).
+    - **Amount**: `moneyFull(a.allocation_amount)`.
+    - **Reason**: `a.message` explainable text.
+    - **Risk**: Red pill with `a.severity` (e.g. "Very high", "Strong anomaly", "High", etc.).
+    - **Details Button**: Triggers `openModal(a.project_id)` displaying complete anomaly evidence alongside project data.
+- **UI States Handled**:
+  - **Loading State**: Displays animated spinner indicator with text `⏳ Loading real anomalies from backend API...`. Summary cards show `...`.
+  - **Empty State**: Displays `No anomaly records detected by backend.` or `No anomalies found for the "${ACTIVE_HOUSE}" filter.`.
+  - **Error State**: Displays a red warning panel `⚠️ Unable to load anomaly records from backend API` with server endpoint, error message, and an interactive `Retry API Connection` button. Cards show `—` and badge shows `!`. Other dashboard sections continue functioning without crash.
 
 ---
 
 ## Authentication
 - **Current Branch Status**:
-  - No authentication or authorization is required by [`backend/app/api/v1/routes/projects.py`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/api/v1/routes/projects.py) or [`backend/app/api/v1/routes/anomalies.py`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/api/v1/routes/anomalies.py). All endpoints are publicly accessible.
-  - [`backend/app/db/supabase.py`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/db/supabase.py) contains scaffolded client factories and `/api/v1/config/status` provides connection status.
-  - [`frontend/index2.html`](file:///c:/Users/keert/Hackathon/Hackathon-Project/frontend/index2.html) has no login screens or token handlers.
-- **Git History Note**: A TanStack Start Supabase Auth implementation was built in remote branch `lovable/main`, but authentication is deliberately deferred until after core frontend-backend anomaly integration is complete.
+  - Backend endpoints are publicly accessible and do not require authentication headers.
+  - Frontend makes direct fetch requests to backend.
+  - Authentication is deferred until core frontend-backend functionality is complete.
 
 ---
 
 ## CORS
 - **Configuration Location**: [`backend/app/main.py:43-49`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/main.py#L43-L49) and [`backend/app/core/config.py:47`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/core/config.py#L47).
-- **Current Settings**:
-  - `CORSMiddleware` active on the FastAPI app.
-  - Configured `CORS_ORIGINS`: `"http://localhost:3000,http://localhost:5173,http://localhost:5500,http://127.0.0.1:5500,http://localhost:8000,http://127.0.0.1:8000,http://localhost:8080,http://127.0.0.1:8080"`.
-  - `allow_credentials = True`
-  - `allow_methods = ["*"]`
-  - `allow_headers = ["*"]`
+- **Configured `CORS_ORIGINS`**:
+  `"http://localhost:3000,http://localhost:5173,http://localhost:5500,http://127.0.0.1:5500,http://localhost:8000,http://127.0.0.1:8000,http://localhost:8080,http://127.0.0.1:8080,null"`
+  - `null` origin is safely explicitly included to support browsers opening `frontend/index2.html` directly as a local file (`file:///...`), without wildcard credentials.
 
 ---
 
 ## Dependencies & Runtime Status
-- **Environment**: Verified running on Python 3.14 venv (`backend/venv`).
-- **Installed Packages** ([`backend/requirements.txt`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/requirements.txt)):
-  - `fastapi==0.115.6`
-  - `uvicorn[standard]==0.34.0`
-  - `pydantic==2.10.4`
-  - `pydantic-settings==2.7.0`
-  - `python-dotenv==1.0.1`
-  - `supabase==2.11.0`
-  - `httpx==0.27.2`
-  - `pytest==8.3.4`
-- **Runtime Status**: Clean startup, zero import errors, interactive docs available at `/docs`.
+- **Environment**: Python 3.14 venv (`backend/venv`).
+- **FastAPI / Uvicorn**: Verified running and serving API requests on port 8000.
+- **Frontend**: Pure Vanilla HTML5/CSS3/JS, zero build step required.
 
 ---
 
 ## Known Issues
 1. **Frontend File Size and Decoupling**:
-   - `frontend/index2.html` is 2.76 MB due to 5,816 inlined JSON project rows. The UI needs to be connected to the backend API (`/api/v1/works`, `/api/v1/anomalies`, `/api/v1/anomalies/summary`) via `fetch()` calls so the hardcoded data can be removed.
-2. **Data-Quality vs. Statistical Anomaly Discrepancy**:
-   - The frontend's current `#anomalies` tab displays Excel missing data flags (e.g., missing date), whereas the backend service provides statistical anomaly detection (extreme allocation via Robust Z-score and repeated amount clustering).
+   - `frontend/index2.html` still contains the inlined `ALL_DATA` array for the Project Explorer tab. This will be decoupled and wired to `/api/v1/works` and `/api/v1/dashboard` in Checkpoint 3.
 
 ---
 
 ## Completed Checkpoints
 - **Checkpoint 0**: Project inspection and persistent handoff system created (`ANTIGRAVITY_HANDOFF.md` and `.agents/rules/project_rules.md`).
-- **Checkpoint 1**: Expose existing anomaly detector through backend API.
-  - Files modified:
-    - [`backend/app/api/v1/routes/projects.py`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/api/v1/routes/projects.py): Added `@lru_cache(maxsize=1)` to `load_works()` returning `tuple(reader)` for caching and compatibility with `.cache_clear()`.
-    - [`backend/app/api/v1/routes/anomalies.py`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/api/v1/routes/anomalies.py): Added defensive `hasattr(load_works, "cache_clear")` in `/api/v1/refresh`.
-    - [`backend/app/core/config.py`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/core/config.py): Expanded default `CORS_ORIGINS` to allow standard frontend development ports (5500, 8000, 8080, 5173, 3000).
-  - Verified API functionality:
-    - `GET /health` -> 200 OK
-    - `GET /docs` -> 200 OK
-    - `GET /api/v1/works` -> 200 OK (5,816 real records loaded)
-    - `GET /api/v1/anomalies` -> 200 OK (5,097 real anomalies returned)
-    - `GET /api/v1/anomalies/summary` -> 200 OK (4,466 repeated amount patterns, 631 extreme allocations)
-    - `POST /api/v1/refresh` -> 200 OK (cache cleared and reloaded)
-    - Live Uvicorn server test confirmed live HTTP requests succeed with 200 OK.
+- **Checkpoint 1**: Expose existing anomaly detector through backend API (`/api/v1/anomalies`, `/api/v1/anomalies/summary`, `/api/v1/refresh`).
+- **Checkpoint 2**: Connect existing Anomaly UI in `frontend/index2.html` to real backend API:
+  - Frontend queries `/api/v1/anomalies/summary` and `/api/v1/anomalies?limit=250`.
+  - Replaced hardcoded anomaly card counts and mock table data with live backend data.
+  - Added loading state, empty state, API error state with retry button.
+  - Upgraded modal inspector to display statistical anomaly evidence and peer metrics.
+  - Added safe `null` origin to backend `CORS_ORIGINS` for `file://` execution.
 
 ---
 
 ## Next Checkpoint
-- **Checkpoint 2 — Connect frontend to real backend anomaly & project APIs**:
-  - Wire `frontend/index2.html` to fetch real dataset summary from `/api/v1/dashboard`.
-  - Wire project table to fetch paginated rows from `/api/v1/works`.
-  - Wire Anomaly Center to fetch statistical anomaly data from `/api/v1/anomalies` and `/api/v1/anomalies/summary`.
-  - Remove hardcoded `ALL_DATA` constant from `frontend/index2.html` to decouple frontend and drastically reduce bundle size.
+- **Checkpoint 3 — Decouple hardcoded `ALL_DATA` & connect Project Explorer and Dashboard overview to backend APIs**:
+  - Connect Project Explorer table to `/api/v1/works` with backend search, state/house filters, and pagination.
+  - Connect Dashboard overview cards and charts to `/api/v1/dashboard`.
+  - Remove the 2.7 MB hardcoded `ALL_DATA` constant from `frontend/index2.html`.
 
 ---
 
