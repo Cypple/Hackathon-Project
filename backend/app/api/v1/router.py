@@ -15,12 +15,12 @@ Do NOT create these routes until the dataset and methodology are decided.
 
 from fastapi import APIRouter
 
-from app.api.v1.routes import config
-
+from app.api.v1.routes import config,projects
 api_v1_router = APIRouter()
+api_v1_router.include_router(config.router)
+api_v1_router.include_router(projects.router)
 
 # Stage 3: configuration status (is Supabase reachable?)
-api_v1_router.include_router(config.router)
 
 # Stage 4 and Stage 5 will add lines like:
 #   from app.api.v1.routes import auth
