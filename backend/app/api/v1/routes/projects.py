@@ -5,17 +5,18 @@ import os
 router = APIRouter()
 
 
-# Location of the real dataset
+from functools import lru_cache
 from pathlib import Path
 
 DATA_FILE = Path(__file__).resolve().parents[4] / "data" / "sanctioned_mplads_projects.csv"
 
 
 # Load data from CSV
+@lru_cache(maxsize=1)
 def load_works():
     with open(DATA_FILE, "r", encoding="utf-8-sig") as file:
         reader = csv.DictReader(file)
-        return list(reader)
+        return tuple(reader)
 
 
 # Convert amount to number

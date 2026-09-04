@@ -13,19 +13,21 @@ MPLADS Monitoring / Anomaly Detection Hackathon Project
 - Existing frontend identified
 - Existing anomaly UI identified
 - Relevant branches/commits inspected
+- Checkpoint 0: Project handoff system & rules established
+- Checkpoint 1: Backend verified, cached data loading enabled, cache_clear bug fixed, CORS expanded, anomaly endpoints tested live
 
 ## CURRENT CHECKPOINT
-Checkpoint 0
+Checkpoint 1
 
 ## NEXT CHECKPOINT
-Checkpoint 1 — Backend/anomaly API verification
+Checkpoint 2 — Connect frontend dashboard and anomaly UI to backend API
 
 ---
 
 ## Backend Architecture
 - **Framework**: FastAPI (Python 3.10+) running via Uvicorn.
 - **Application Factory**: [`backend/app/main.py`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/main.py) defines `create_app() -> FastAPI` and exports the application object `app`.
-  - Intended launch command: `uvicorn app.main:app --reload` (run from the `backend/` directory).
+  - Launch command: `uvicorn app.main:app --reload` (run from the `backend/` directory) or `python -m uvicorn app.main:app --app-dir backend --reload`.
 - **Configuration & Settings**: [`backend/app/core/config.py`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/core/config.py) uses `pydantic-settings` to load configuration from `.env` and environment variables (`APP_NAME`, `APP_VERSION`, `ENVIRONMENT`, `DEBUG`, `LOG_LEVEL`, `API_V1_PREFIX`, `CORS_ORIGINS`, `SUPABASE_*`).
 - **Database & External Services**: [`backend/app/db/supabase.py`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/db/supabase.py) contains factory functions `get_supabase_client()`, `get_supabase_admin_client()`, and `check_supabase_connection()`.
 - **Modular Routing**:
@@ -68,11 +70,11 @@ The anomaly endpoints are implemented in [`backend/app/api/v1/routes/anomalies.p
      - `severity` (optional string): filter by severity name (e.g. `"Strong anomaly"`, `"Very high"`, etc.).
      - `limit` (integer, 1 to 500, default 50).
      - `offset` (integer, non-negative, default 0).
-   - Results are cached in-memory with `@lru_cache(maxsize=1)`.
+   - In-memory cached with `@lru_cache(maxsize=1)`.
 2. **`GET /api/v1/anomalies/summary`**
    - Returns aggregated statistics: counts by anomaly type, severity, detector, extreme allocation count, repeated amount pattern count, average and maximum pattern scores.
 3. **`POST /api/v1/refresh`**
-   - Cache invalidation and re-detection trigger. *(See Known Issues regarding `load_works.cache_clear()`)*.
+   - Cache invalidation and re-detection trigger. Safely calls `cache_clear()` on `load_works` and `get_cached_anomalies`.
 
 ---
 
@@ -81,32 +83,37 @@ The anomaly endpoints are implemented in [`backend/app/api/v1/routes/anomalies.p
 ### `GET /api/v1/anomalies`
 ```json
 {
-  "total": 120,
-  "limit": 50,
+  "total": 5097,
+  "limit": 2,
   "offset": 0,
   "disclaimer": "Anomalies indicate statistical irregularities and require verification; they do not prove fraud.",
   "anomalies": [
     {
-      "project_id": "MPLADS_...",
-      "anomaly_type": "extreme_allocation",
+      "project_id": "MPLADS_fc05439ee83842d2",
+      "anomaly_type": "repeated_amount_pattern",
+      "detector": "A_strong_pattern",
       "result": "Requires verification",
-      "severity": "Strong anomaly",
-      "allocation_amount": 50000000.0,
-      "peer_group": {
-        "state": "Uttar Pradesh",
-        "category": "Normal/Others",
-        "size": 2291
-      },
-      "peer_median": 200000.0,
-      "peer_median_ratio": 250.0,
-      "percentile": 99.95,
-      "robust_z_score": 12.34,
-      "strong_anomaly_evidence": {
-        "ratio_ge_4x": true,
-        "percentile_ge_99": true,
-        "robust_z_ge_threshold": true
-      },
-      "message": "Allocation is unusually high compared with comparable projects."
+      "severity": "Very high",
+      "pattern_score": 100,
+      "matching_projects": 6,
+      "different_locations": 6,
+      "same_mp": true,
+      "same_work_type": true,
+      "same_amount": true,
+      "same_recommendation_date": true,
+      "mp": "SR Parthiban",
+      "work_type": "lighting of public spaces",
+      "recommendation_date": "10/19/2023",
+      "allocation_amount": 540000.0,
+      "locations": [
+        "city=elampillai | ward=17",
+        "city=elampillai | ward=9",
+        "city=kadayampatti | ward=12",
+        "city=konganapuram | ward=8",
+        "city=nangavalli | ward=12",
+        "city=poolampatti | ward=1"
+      ],
+      "message": "The same MP repeatedly recommended the same work type for the same amount on the same date across multiple locations."
     }
   ]
 }
@@ -115,27 +122,27 @@ The anomaly endpoints are implemented in [`backend/app/api/v1/routes/anomalies.p
 ### `GET /api/v1/anomalies/summary`
 ```json
 {
-  "total_anomalies": 120,
+  "total_anomalies": 5097,
   "anomalies_by_type": {
-    "extreme_allocation": 45,
-    "repeated_amount_pattern": 75
+    "repeated_amount_pattern": 4466,
+    "extreme_allocation": 631
   },
   "anomalies_by_severity": {
-    "Very high": 20,
-    "Strong anomaly": 15,
-    "High": 30,
-    "Review flag": 30,
-    "Medium": 15,
-    "Low": 10
+    "Very high": 3144,
+    "High": 407,
+    "Strong anomaly": 439,
+    "Medium": 289,
+    "Review flag": 192,
+    "Low": 626
   },
   "anomalies_by_detector": {
-    "A_strong_pattern": 40,
-    "B_broader_pattern": 35,
-    "Unknown": 45
+    "A_strong_pattern": 4064,
+    "B_broader_pattern": 402,
+    "Unknown": 631
   },
-  "extreme_allocation_count": 45,
-  "repeated_amount_pattern_count": 75,
-  "average_pattern_score": 82.5,
+  "extreme_allocation_count": 631,
+  "repeated_amount_pattern_count": 4466,
+  "average_pattern_score": 96.31,
   "maximum_pattern_score": 100,
   "disclaimer": "Anomalies indicate statistical irregularities and require verification; they do not prove fraud."
 }
@@ -178,7 +185,7 @@ The anomaly endpoints are implemented in [`backend/app/api/v1/routes/anomalies.p
   - Anomaly flags in `ALL_DATA`: Currently contains static flags derived directly from workbook data-cleaning columns (`"risk": 25, "anomaly": "Missing date"` or `"risk": 0, "anomaly": "No flagged anomaly"`).
   - `SUMMARY`: Precomputed static totals (`missing_date: 4035`, `missing_amount: 0`, `zero_neg: 0`, `future: 0`, `critical: 0`, etc.).
   - `STATES` and `CATS`: Precomputed static category and state arrays.
-- **Network Calls**: There are currently **no `fetch()` or AJAX calls** in `frontend/index2.html`; all rendering logic operates purely in-memory on the static JS objects.
+- **Network Calls**: Currently operates in-memory; will be connected to the FastAPI endpoints in Checkpoint 2.
 
 ---
 
@@ -195,16 +202,16 @@ The anomaly endpoints are implemented in [`backend/app/api/v1/routes/anomalies.p
 - **Configuration Location**: [`backend/app/main.py:43-49`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/main.py#L43-L49) and [`backend/app/core/config.py:47`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/core/config.py#L47).
 - **Current Settings**:
   - `CORSMiddleware` active on the FastAPI app.
-  - Default `CORS_ORIGINS`: `"http://localhost:3000,http://localhost:5173"`.
+  - Configured `CORS_ORIGINS`: `"http://localhost:3000,http://localhost:5173,http://localhost:5500,http://127.0.0.1:5500,http://localhost:8000,http://127.0.0.1:8000,http://localhost:8080,http://127.0.0.1:8080"`.
   - `allow_credentials = True`
   - `allow_methods = ["*"]`
   - `allow_headers = ["*"]`
-- **Integration Note**: To allow `frontend/index2.html` to communicate with the backend when served via local development servers (e.g. port 5500, 8080, 8000) or file systems, `CORS_ORIGINS` will need to include the local frontend development origin (or allow `*`).
 
 ---
 
-## Dependencies
-- **Backend** ([`backend/requirements.txt`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/requirements.txt)):
+## Dependencies & Runtime Status
+- **Environment**: Verified running on Python 3.14 venv (`backend/venv`).
+- **Installed Packages** ([`backend/requirements.txt`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/requirements.txt)):
   - `fastapi==0.115.6`
   - `uvicorn[standard]==0.34.0`
   - `pydantic==2.10.4`
@@ -213,36 +220,42 @@ The anomaly endpoints are implemented in [`backend/app/api/v1/routes/anomalies.p
   - `supabase==2.11.0`
   - `httpx==0.27.2`
   - `pytest==8.3.4`
-- **Frontend**:
-  - Pure Vanilla HTML5, CSS3, JavaScript.
-  - External CDN Fonts: Google Fonts (*DM Sans*, *Manrope*).
+- **Runtime Status**: Clean startup, zero import errors, interactive docs available at `/docs`.
 
 ---
 
 ## Known Issues
-1. **Cache clear bug in `/api/v1/refresh`**:
-   - In [`backend/app/api/v1/routes/anomalies.py:143`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/api/v1/routes/anomalies.py#L143), `refresh()` calls `load_works.cache_clear()`.
-   - However, `load_works` in [`backend/app/api/v1/routes/projects.py`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/api/v1/routes/projects.py#L16) is a regular function without `@lru_cache`, causing an `AttributeError` if `POST /api/v1/refresh` is called.
-2. **Synchronous Uncached CSV Loading in Projects API**:
-   - Every invocation of endpoints in `projects.py` re-reads the full CSV file from disk synchronously.
-3. **Frontend File Size and Decoupling**:
+1. **Frontend File Size and Decoupling**:
    - `frontend/index2.html` is 2.76 MB due to 5,816 inlined JSON project rows. The UI needs to be connected to the backend API (`/api/v1/works`, `/api/v1/anomalies`, `/api/v1/anomalies/summary`) via `fetch()` calls so the hardcoded data can be removed.
-4. **Data-Quality vs. Statistical Anomaly Discrepancy**:
+2. **Data-Quality vs. Statistical Anomaly Discrepancy**:
    - The frontend's current `#anomalies` tab displays Excel missing data flags (e.g., missing date), whereas the backend service provides statistical anomaly detection (extreme allocation via Robust Z-score and repeated amount clustering).
 
 ---
 
 ## Completed Checkpoints
 - **Checkpoint 0**: Project inspection and persistent handoff system created (`ANTIGRAVITY_HANDOFF.md` and `.agents/rules/project_rules.md`).
+- **Checkpoint 1**: Expose existing anomaly detector through backend API.
+  - Files modified:
+    - [`backend/app/api/v1/routes/projects.py`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/api/v1/routes/projects.py): Added `@lru_cache(maxsize=1)` to `load_works()` returning `tuple(reader)` for caching and compatibility with `.cache_clear()`.
+    - [`backend/app/api/v1/routes/anomalies.py`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/api/v1/routes/anomalies.py): Added defensive `hasattr(load_works, "cache_clear")` in `/api/v1/refresh`.
+    - [`backend/app/core/config.py`](file:///c:/Users/keert/Hackathon/Hackathon-Project/backend/app/core/config.py): Expanded default `CORS_ORIGINS` to allow standard frontend development ports (5500, 8000, 8080, 5173, 3000).
+  - Verified API functionality:
+    - `GET /health` -> 200 OK
+    - `GET /docs` -> 200 OK
+    - `GET /api/v1/works` -> 200 OK (5,816 real records loaded)
+    - `GET /api/v1/anomalies` -> 200 OK (5,097 real anomalies returned)
+    - `GET /api/v1/anomalies/summary` -> 200 OK (4,466 repeated amount patterns, 631 extreme allocations)
+    - `POST /api/v1/refresh` -> 200 OK (cache cleared and reloaded)
+    - Live Uvicorn server test confirmed live HTTP requests succeed with 200 OK.
 
 ---
 
 ## Next Checkpoint
-- **Checkpoint 1 — Backend/anomaly API verification**:
-  - Test and verify FastAPI server startup (`app.main:app`).
-  - Verify `/health`, `/api/v1/works`, `/api/v1/anomalies`, and `/api/v1/anomalies/summary` return valid responses against the real dataset.
-  - Address the `load_works.cache_clear()` issue in `anomalies.py`.
-  - Validate CORS configuration against local frontend serving origins.
+- **Checkpoint 2 — Connect frontend to real backend anomaly & project APIs**:
+  - Wire `frontend/index2.html` to fetch real dataset summary from `/api/v1/dashboard`.
+  - Wire project table to fetch paginated rows from `/api/v1/works`.
+  - Wire Anomaly Center to fetch statistical anomaly data from `/api/v1/anomalies` and `/api/v1/anomalies/summary`.
+  - Remove hardcoded `ALL_DATA` constant from `frontend/index2.html` to decouple frontend and drastically reduce bundle size.
 
 ---
 

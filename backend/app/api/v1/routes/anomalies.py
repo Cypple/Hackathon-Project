@@ -140,7 +140,8 @@ def get_anomaly_summary():
 @router.post("/refresh")
 def refresh():
 
-    load_works.cache_clear()
+    if hasattr(load_works, "cache_clear"):
+        load_works.cache_clear()
     get_cached_anomalies.cache_clear()
 
     works = load_works()

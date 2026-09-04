@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     # ---- CORS -----------------------------------------------------------
     # CORS = which website addresses are allowed to call this API from a
     # browser. Comma-separated list, e.g. "http://localhost:3000,https://x.com"
-    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
+    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173,http://localhost:5500,http://127.0.0.1:5500,http://localhost:8000,http://127.0.0.1:8000,http://localhost:8080,http://127.0.0.1:8080"
 
     # ---- Supabase (used from Stage 3 onwards) ---------------------------
     # Left empty on purpose so the app can still start before Supabase is set
