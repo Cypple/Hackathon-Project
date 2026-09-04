@@ -1,0 +1,16 @@
+# Real secrets - must NEVER be committed to GitHub.
+.env
+.env.local
+.env.*.local
+
+# Python virtual environment (the local folder holding installed packages)
+venv/
+.venv/
+env/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/

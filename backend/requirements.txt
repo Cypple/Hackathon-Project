@@ -1,0 +1,13 @@
+# Python packages our backend needs.
+# Install them with:  pip install -r requirements.txt
+
+fastapi==0.115.6          # the web framework that gives us API endpoints
+uvicorn[standard]==0.34.0 # the server that actually runs the FastAPI app
+pydantic==2.10.4          # validates incoming data (checks types/formats)
+pydantic-settings==2.7.0  # reads settings from environment variables / .env
+python-dotenv==1.0.1      # loads the .env file during local development
+
+# Added in later stages (kept here so the file is stable):
+supabase==2.11.0          # official Supabase client (Stage 3)
+httpx==0.27.2             # HTTP client used by supabase
+pytest==8.3.4             # test runner (Stage 13)
