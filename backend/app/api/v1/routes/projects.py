@@ -6,12 +6,9 @@ router = APIRouter()
 
 
 # Location of the real dataset
-DATA_FILE = os.path.abspath(
-    os.path.join(
-        os.path.dirname(__file__),
-        "../../../../data/ sanctioned_mplads_projects.csv"
-    )
-)
+from pathlib import Path
+
+DATA_FILE = Path(__file__).resolve().parents[4] / "data" / "sanctioned_mplads_projects.csv"
 
 
 # Load data from CSV
