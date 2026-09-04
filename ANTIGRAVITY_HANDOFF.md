@@ -16,12 +16,13 @@ MPLADS Monitoring / Anomaly Detection Hackathon Project
 - Checkpoint 0: Project handoff system & rules established
 - Checkpoint 1: Backend verified, cached data loading enabled, cache_clear bug fixed, CORS expanded, anomaly endpoints tested live
 - Checkpoint 2: Connected existing Anomaly UI in `frontend/index2.html` to real backend API endpoints (`/api/v1/anomalies`, `/api/v1/anomalies/summary`) with loading, empty, error, and modal states
+- Checkpoint 3: Real frontend ↔ backend integration verified end-to-end via automated browser QA. Anomaly Center UI confirmed rendering real backend anomaly data from `/api/v1/anomalies` and `/api/v1/anomalies/summary` across all states (loading, success, empty, error, modal, house filter, reload)
 
 ## CURRENT CHECKPOINT
-Checkpoint 2
+Checkpoint 3
 
 ## NEXT CHECKPOINT
-Checkpoint 3 — Decouple hardcoded `ALL_DATA` & connect Project Explorer and Dashboard overview to backend APIs
+Checkpoint 4: Authentication
 
 ---
 
@@ -227,14 +228,58 @@ The anomaly endpoints are implemented in [`backend/app/api/v1/routes/anomalies.p
   - Added loading state, empty state, API error state with retry button.
   - Upgraded modal inspector to display statistical anomaly evidence and peer metrics.
   - Added safe `null` origin to backend `CORS_ORIGINS` for `file://` execution.
+- **Checkpoint 3**: Real frontend ↔ backend integration verified end-to-end with automated browser QA:
+  - **Status**: Completed and fully verified end-to-end.
+  - **Backend Endpoints Used**:
+    - `GET http://127.0.0.1:8000/api/v1/anomalies/summary`
+    - `GET http://127.0.0.1:8000/api/v1/anomalies?limit=250`
+  - **Exact JSON Fields Mapped by Frontend**:
+    - From `/api/v1/anomalies/summary`:
+      - `total_anomalies` (5,097) -> `#futureInvalid` (Card 3: Total detected anomalies), `#riskBadge` (Sidebar badge), `#alerts` (Dashboard overview alerts card)
+      - `repeated_amount_pattern_count` (4,466) -> `#missingDate` (Card 1: Repeated amount patterns)
+      - `extreme_allocation_count` (631) -> `#missingAmount` (Card 2: Extreme allocations)
+    - From `/api/v1/anomalies`:
+      - `anomalies`: Array of anomaly records:
+        - `project_id` -> Displayed in table subtitle, used as key for inspector modal
+        - `work_type` -> Fallback title when record not in local index
+        - `mp` -> Member of Parliament name in table subtitle
+        - `allocation_amount` -> Formatted via `moneyFull()` (e.g. "₹5,40,000") in Amount column
+        - `message` -> Human-readable explanation text in Reason column
+        - `severity` -> Severity string ("Very high", "High", "Strong anomaly", etc.) in Risk pill
+        - `anomaly_type` -> Modal inspector subtitle and detection type field
+        - `result` -> Verification flag ("Requires verification") in Modal
+        - `pattern_score` -> Pattern score ("X / 100") in Modal
+        - `matching_projects` -> Project count ("X works") in Modal
+        - `different_locations` -> Location count ("X locations") in Modal
+        - `peer_group` (`state`, `category`, `size`) -> Peer group summary in Modal
+        - `peer_median` -> Statistical median formatted as currency in Modal
+        - `peer_median_ratio` -> Ratio vs peer median ("Xx") in Modal
+        - `robust_z_score` -> Robust Z-score in Modal
+        - `percentile` -> Percentile ranking ("X%") in Modal
+        - `locations` -> Location cluster list in Modal
+  - **End-to-End Test Results**:
+    - Automated browser test run via Chrome DevTools Protocol (CDP) connecting headless Chrome to `frontend/index2.html` and the live FastAPI backend.
+    - Verified all 10 QA checkpoints:
+      1. In-memory API data correctly loaded (`REAL_ANOMALIES` length: 250, `ANOMALIES_SUMMARY.total_anomalies`: 5097).
+      2. UI summary cards and sidebar badges accurately display live backend counts ("5,097", "4,466", "631").
+      3. Anomaly table renders 150 rows sliced from backend results with correct titles, states, formatted amounts, explainable messages, and severity badges.
+      4. Detail modal successfully triggers from table rows and renders complete statistical evidence.
+      5. House filter buttons dynamically filter anomalies (Lok Sabha: 150, Rajya Sabha: 36, All: 150).
+      6. Loading state verified (spinner row, ellipsis `...` in badges and cards).
+      7. Empty state verified ("No anomaly records detected by backend.").
+      8. Error state verified (red alert panel, "!" in badge, "—" in cards, and "Retry API Connection" button).
+      9. Recovery verified (re-invoking `fetchBackendAnomalies()` restores all live data).
+      10. Full page reload verified (clean re-fetch and DOM population in 0.5s).
+  - **Remaining Known Issues**:
+    - `frontend/index2.html` still retains the inlined `ALL_DATA` constant for the Project Explorer tab (to be decoupled in future work).
+- **Next Checkpoint**:
+  - `Checkpoint 4: Authentication`
 
 ---
 
 ## Next Checkpoint
-- **Checkpoint 3 — Decouple hardcoded `ALL_DATA` & connect Project Explorer and Dashboard overview to backend APIs**:
-  - Connect Project Explorer table to `/api/v1/works` with backend search, state/house filters, and pagination.
-  - Connect Dashboard overview cards and charts to `/api/v1/dashboard`.
-  - Remove the 2.7 MB hardcoded `ALL_DATA` constant from `frontend/index2.html`.
+- **Checkpoint 4: Authentication**:
+  - Implement user authentication (Supabase or backend auth), login/logout states, and token-based protection where appropriate.
 
 ---
 
