@@ -1,12 +1,34 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-
-import csv
-import os
-from collections import Counter
+from pathlib import Path
 from functools import lru_cache
+import importlib.util
+import math
 
-from anomaly_detector import detect_anomalies
+import pandas as pd
+from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+
+# ============================================================
+# PATHS
+# ============================================================
+
+BASE_DIR = Path(__file__).resolve().parent
+
+DATA_PATH = (
+    BASE_DIR
+    / "data"
+    / "sanctioned_mplads_projects.csv"
+)
+
+FRONTEND_DIR = (
+    BASE_DIR.parent
+    / "frontend"
+    / "anomaly"
+)
+
+DETECTOR_PATH = BASE_DIR / "anomaly_detector.py"
 
 
 # ============================================================
@@ -14,9 +36,9 @@ from anomaly_detector import detect_anomalies
 # ============================================================
 
 app = FastAPI(
-    title="MPLADS Monitoring & Anomaly Detection API",
-    description="Backend API for MPLADS project monitoring and explainable anomaly detection.",
-    version="1.0.0"
+    title="MPLADS Sentinel API",
+    version="1.0.0",
+    description="AI-assisted MPLADS monitoring and early-warning system",
 )
 
 
@@ -34,623 +56,696 @@ app.add_middleware(
 
 
 # ============================================================
-# DATASET LOCATION
+# FRONTEND
 # ============================================================
 
-DATA_FILE = os.path.join(
-    os.path.dirname(__file__),
-    "data",
-    "sanctioned_mplads_projects.csv"
-)
+if FRONTEND_DIR.exists():
+    app.mount(
+        "/ui/assets",
+        StaticFiles(directory=str(FRONTEND_DIR)),
+        name="ui-assets",
+    )
 
 
 # ============================================================
-# LOAD DATA
+# ANOMALY DETECTOR
 # ============================================================
 
-@lru_cache(maxsize=1)
-def load_works():
-    """
-    Load the complete MPLADS dataset once and keep it in memory.
+def load_detector():
 
-    This prevents the CSV from being read from disk on every request.
-    """
-
-    if not os.path.exists(DATA_FILE):
+    if not DETECTOR_PATH.exists():
         raise FileNotFoundError(
-            f"Dataset not found: {DATA_FILE}"
+            f"anomaly_detector.py not found at: {DETECTOR_PATH}"
         )
 
-    with open(
-        DATA_FILE,
-        "r",
-        encoding="utf-8-sig"
-    ) as file:
+    spec = importlib.util.spec_from_file_location(
+        "mplads_anomaly_detector",
+        DETECTOR_PATH,
+    )
 
-        reader = csv.DictReader(file)
+    module = importlib.util.module_from_spec(spec)
 
-        return tuple(
-            dict(row)
-            for row in reader
+    spec.loader.exec_module(module)
+
+    if not hasattr(module, "detect_anomalies"):
+        raise AttributeError(
+            "anomaly_detector.py must contain "
+            "detect_anomalies(works)"
         )
+
+    return module.detect_anomalies
 
 
 # ============================================================
-# ANOMALY CACHE
+# DATA
 # ============================================================
 
 @lru_cache(maxsize=1)
-def get_cached_anomalies():
-    """
-    Run Team A's anomaly detector once and cache the result.
+def load_dataframe():
 
-    This is important because anomaly detection over the complete
-    dataset can take noticeably longer than a normal API request.
-    """
-
-    works = list(load_works())
-
-    return tuple(
-        detect_anomalies(works)
-    )
-
-
-# ============================================================
-# REFRESH CACHE
-# ============================================================
-
-def refresh_data():
-
-    load_works.cache_clear()
-    get_cached_anomalies.cache_clear()
-
-    # Reload dataset
-    works = load_works()
-
-    # Recalculate anomalies
-    anomalies = get_cached_anomalies()
-
-    return {
-        "projects_loaded": len(works),
-        "anomalies_detected": len(anomalies)
-    }
-
-
-# ============================================================
-# CONVERT ALLOCATION AMOUNT TO NUMBER
-# ============================================================
-
-def get_amount(work):
-
-    value = (
-        work.get("ALLOCATION_AMOUNT_NUM")
-        or work.get("ALLOCATION AMOUNT")
-        or "0"
-    )
-
-    try:
-
-        return float(
-            str(value)
-            .replace(",", "")
-            .strip()
+    if not DATA_PATH.exists():
+        raise FileNotFoundError(
+            f"CSV not found at: {DATA_PATH}"
         )
 
-    except (ValueError, TypeError):
+    df = pd.read_csv(
+        DATA_PATH,
+        low_memory=False,
+    )
 
-        return 0
+    # Make sure allocation is numeric
+    if "ALLOCATION_AMOUNT_NUM" in df.columns:
 
+        df["ALLOCATION_AMOUNT_NUM"] = pd.to_numeric(
+            df["ALLOCATION_AMOUNT_NUM"],
+            errors="coerce",
+        ).fillna(0)
 
-# ============================================================
-# HOME
-# ============================================================
+    elif "ALLOCATION AMOUNT" in df.columns:
 
-@app.get("/")
-def home():
-
-    return {
-        "message": "MPLADS Backend is running!",
-        "version": "1.0.0",
-        "projects": len(load_works()),
-        "anomalies": len(get_cached_anomalies())
-    }
-
-
-# ============================================================
-# HEALTH CHECK
-# ============================================================
-
-@app.get("/health")
-def health_check():
-
-    works = load_works()
-    anomalies = get_cached_anomalies()
-
-    return {
-        "status": "healthy",
-        "backend": "MPLADS Backend",
-        "projects": len(works),
-        "anomalies": len(anomalies)
-    }
-
-
-# ============================================================
-# WORKS
-# ============================================================
-
-@app.get("/works")
-def get_works(
-    state: str | None = None,
-    district: str | None = None,
-    constituency: str | None = None,
-    category: str | None = None,
-    status: str | None = None,
-    limit: int = 20,
-    offset: int = 0
-):
-
-    # --------------------------------------------------------
-    # Validate pagination
-    # --------------------------------------------------------
-
-    if limit < 1 or limit > 500:
-
-        raise HTTPException(
-            status_code=400,
-            detail="limit must be between 1 and 500"
+        df["ALLOCATION_AMOUNT_NUM"] = (
+            df["ALLOCATION AMOUNT"]
+            .astype(str)
+            .str.replace(",", "", regex=False)
+            .str.replace("₹", "", regex=False)
+            .str.extract(
+                r"([-+]?\d*\.?\d+)"
+            )[0]
+            .astype(float)
+            .fillna(0)
         )
 
-    if offset < 0:
-
-        raise HTTPException(
-            status_code=400,
-            detail="offset cannot be negative"
-        )
-
-    # --------------------------------------------------------
-    # Load cached dataset
-    # --------------------------------------------------------
-
-    works = list(load_works())
-
-    # --------------------------------------------------------
-    # Filters
-    # --------------------------------------------------------
-
-    if state:
-
-        works = [
-            work
-            for work in works
-            if work.get("STATE", "").lower()
-            == state.lower()
-        ]
-
-    if district:
-
-        works = [
-            work
-            for work in works
-            if work.get("DISTRICT", "").lower()
-            == district.lower()
-        ]
-
-    if constituency:
-
-        works = [
-            work
-            for work in works
-            if work.get("CONSTITUENCY", "").lower()
-            == constituency.lower()
-        ]
-
-    if category:
-
-        works = [
-            work
-            for work in works
-            if work.get("CATEGORY", "").lower()
-            == category.lower()
-        ]
-
-    if status:
-
-        works = [
-            work
-            for work in works
-            if work.get("STATUS", "").lower()
-            == status.lower()
-        ]
-
-    # --------------------------------------------------------
-    # Pagination
-    # --------------------------------------------------------
-
-    total = len(works)
-
-    paginated_works = works[
-        offset:offset + limit
-    ]
-
-    return {
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-        "works": paginated_works
-    }
-
-
-# ============================================================
-# GET ONE WORK
-# ============================================================
-
-@app.get("/works/{work_id}")
-def get_work(work_id: str):
-
-    works = load_works()
-
-    for work in works:
-
-        if work.get("PROJECT_ID") == work_id:
-
-            return work
-
-    raise HTTPException(
-        status_code=404,
-        detail="Work not found"
-    )
-
-
-# ============================================================
-# FILTER OPTIONS
-# ============================================================
-
-@app.get("/filters")
-def get_filters():
-
-    works = load_works()
-
-    states = sorted({
-        work.get("STATE")
-        for work in works
-        if work.get("STATE")
-    })
-
-    districts = sorted({
-        work.get("DISTRICT")
-        for work in works
-        if work.get("DISTRICT")
-    })
-
-    constituencies = sorted({
-        work.get("CONSTITUENCY")
-        for work in works
-        if work.get("CONSTITUENCY")
-    })
-
-    categories = sorted({
-        work.get("CATEGORY")
-        for work in works
-        if work.get("CATEGORY")
-    })
-
-    statuses = sorted({
-        work.get("STATUS")
-        for work in works
-        if work.get("STATUS")
-    })
-
-    return {
-        "states": states,
-        "districts": districts,
-        "constituencies": constituencies,
-        "categories": categories,
-        "statuses": statuses
-    }
-
-
-# ============================================================
-# DASHBOARD
-# ============================================================
-
-@app.get("/dashboard")
-def get_dashboard():
-
-    works = load_works()
-
-    # --------------------------------------------------------
-    # Total projects
-    # --------------------------------------------------------
-
-    total_projects = len(works)
-
-    # --------------------------------------------------------
-    # Total allocation
-    # --------------------------------------------------------
-
-    total_allocation = sum(
-        get_amount(work)
-        for work in works
-    )
-
-    # --------------------------------------------------------
-    # Projects by status
-    # --------------------------------------------------------
-
-    status_counts = Counter(
-        work.get("STATUS", "Unknown")
-        for work in works
-    )
-
-    # --------------------------------------------------------
-    # Projects by category
-    # --------------------------------------------------------
-
-    category_counts = Counter(
-        work.get("CATEGORY", "Unknown")
-        for work in works
-    )
-
-    # --------------------------------------------------------
-    # Projects by state
-    # --------------------------------------------------------
-
-    state_counts = Counter(
-        work.get("STATE", "Unknown")
-        for work in works
-    )
-
-    return {
-        "total_projects": total_projects,
-        "total_allocation_amount": total_allocation,
-        "projects_by_status": dict(status_counts),
-        "projects_by_category": dict(category_counts),
-        "projects_by_state": dict(state_counts)
-    }
-
-
-# ============================================================
-# ANOMALY SUMMARY
-# ============================================================
-
-@app.get("/anomalies/summary")
-def get_anomaly_summary():
-
-    anomalies = get_cached_anomalies()
-
-    # --------------------------------------------------------
-    # Count anomaly types
-    # --------------------------------------------------------
-
-    type_counts = Counter(
-        anomaly.get(
-            "anomaly_type",
-            "unknown"
-        )
-        for anomaly in anomalies
-    )
-
-    # --------------------------------------------------------
-    # Count severity
-    # --------------------------------------------------------
-
-    severity_counts = Counter(
-        anomaly.get(
-            "severity",
-            "Unknown"
-        )
-        for anomaly in anomalies
-    )
-
-    # --------------------------------------------------------
-    # Count detectors
-    # --------------------------------------------------------
-
-    detector_counts = Counter(
-        anomaly.get(
-            "detector",
-            "Unknown"
-        )
-        for anomaly in anomalies
-    )
-
-    # --------------------------------------------------------
-    # Pattern score statistics
-    # --------------------------------------------------------
-
-    pattern_scores = [
-        anomaly.get("pattern_score")
-        for anomaly in anomalies
-        if isinstance(
-            anomaly.get("pattern_score"),
-            (int, float)
-        )
-    ]
-
-    # --------------------------------------------------------
-    # Extreme allocation statistics
-    # --------------------------------------------------------
-
-    extreme_allocations = [
-        anomaly
-        for anomaly in anomalies
-        if anomaly.get("anomaly_type")
-        == "extreme_allocation"
-    ]
-
-    repeated_patterns = [
-        anomaly
-        for anomaly in anomalies
-        if anomaly.get("anomaly_type")
-        == "repeated_amount_pattern"
-    ]
-
-    # --------------------------------------------------------
-    # Return summary
-    # --------------------------------------------------------
-
-    return {
-
-        "total_anomalies": len(anomalies),
-
-        "anomalies_by_type": dict(
-            type_counts
-        ),
-
-        "anomalies_by_severity": dict(
-            severity_counts
-        ),
-
-        "anomalies_by_detector": dict(
-            detector_counts
-        ),
-
-        "extreme_allocation_count": len(
-            extreme_allocations
-        ),
-
-        "repeated_amount_pattern_count": len(
-            repeated_patterns
-        ),
-
-        "average_pattern_score": (
-            round(
-                sum(pattern_scores)
-                / len(pattern_scores),
-                2
-            )
-            if pattern_scores
-            else 0
-        ),
-
-        "maximum_pattern_score": (
-            max(pattern_scores)
-            if pattern_scores
-            else 0
-        ),
-
-        "disclaimer": (
-            "Anomalies indicate statistical irregularities "
-            "and require verification; they do not prove fraud."
-        )
-    }
+    return df
 
 
 # ============================================================
 # ANOMALIES
 # ============================================================
 
-@app.get("/anomalies")
-def get_anomalies(
-    anomaly_type: str | None = None,
-    severity: str | None = None,
-    limit: int = 50,
-    offset: int = 0
-):
+@lru_cache(maxsize=1)
+def anomaly_records():
 
-    # --------------------------------------------------------
-    # Validate pagination
-    # --------------------------------------------------------
+    df = load_dataframe()
 
-    if limit < 1 or limit > 500:
+    detector = load_detector()
 
-        raise HTTPException(
-            status_code=400,
-            detail="limit must be between 1 and 500"
-        )
-
-    if offset < 0:
-
-        raise HTTPException(
-            status_code=400,
-            detail="offset cannot be negative"
-        )
-
-    # --------------------------------------------------------
-    # Get cached anomalies
-    # --------------------------------------------------------
-
-    anomalies = list(
-        get_cached_anomalies()
+    records = detector(
+        df.to_dict(orient="records")
     )
 
-    # --------------------------------------------------------
-    # Filter by anomaly type
-    # --------------------------------------------------------
+    return records
 
-    if anomaly_type:
 
-        anomalies = [
-            anomaly
-            for anomaly in anomalies
-            if anomaly.get(
-                "anomaly_type",
-                ""
-            ).lower()
-            == anomaly_type.lower()
+# ============================================================
+# JSON HELPERS
+# ============================================================
+
+def clean_value(value):
+
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
+    if isinstance(value, float) and math.isnan(value):
+        return None
+
+    return value
+
+
+def jsonable(value):
+
+    if isinstance(value, dict):
+
+        return {
+            str(k): jsonable(v)
+            for k, v in value.items()
+        }
+
+    if isinstance(value, list):
+
+        return [
+            jsonable(v)
+            for v in value
         ]
 
-    # --------------------------------------------------------
-    # Filter by severity
-    # --------------------------------------------------------
+    if hasattr(value, "item"):
 
-    if severity:
+        try:
+            return value.item()
+        except Exception:
+            pass
 
-        anomalies = [
-            anomaly
-            for anomaly in anomalies
-            if anomaly.get(
-                "severity",
-                ""
-            ).lower()
-            == severity.lower()
-        ]
+    return clean_value(value)
 
-    # --------------------------------------------------------
-    # Total after filtering
-    # --------------------------------------------------------
 
-    total = len(anomalies)
+def unique_values(df, column):
 
-    # --------------------------------------------------------
-    # Pagination
-    # --------------------------------------------------------
+    if column not in df.columns:
+        return []
 
-    paginated_anomalies = anomalies[
-        offset:offset + limit
+    values = (
+        df[column]
+        .dropna()
+        .astype(str)
+        .str.strip()
+    )
+
+    values = values[
+        values != ""
     ]
 
-    # --------------------------------------------------------
-    # Response
-    # --------------------------------------------------------
+    return (
+        values
+        .drop_duplicates()
+        .sort_values()
+        .tolist()
+    )
+
+
+# ============================================================
+# ROOT
+# ============================================================
+
+@app.get("/")
+def root():
 
     return {
-
-        "total": total,
-
-        "limit": limit,
-
-        "offset": offset,
-
-        "disclaimer": (
-            "Anomalies indicate statistical irregularities "
-            "and require verification; they do not prove fraud."
-        ),
-
-        "anomalies": paginated_anomalies
+        "message": "MPLADS Sentinel API is running",
+        "ui": "/ui/",
+        "docs": "/docs",
     }
 
 
 # ============================================================
-# REFRESH DATA
+# HEALTH
 # ============================================================
 
-@app.post("/refresh")
-def refresh():
+@app.get("/health")
+def health():
 
-    result = refresh_data()
+    df = load_dataframe()
 
     return {
-        "message": "Dataset and anomaly results refreshed successfully.",
-        **result
+        "status": "healthy",
+        "rows": int(len(df)),
+        "columns": list(df.columns),
+    }
+
+
+# ============================================================
+# UI
+# ============================================================
+
+@app.get("/ui/")
+def ui():
+
+    index_file = FRONTEND_DIR / "index.html"
+
+    if not index_file.exists():
+
+        return {
+            "error": (
+                f"Frontend not found at: "
+                f"{index_file}"
+            )
+        }
+
+    return FileResponse(index_file)
+
+
+# ============================================================
+# DASHBOARD
+# ============================================================
+
+@app.get("/api/v1/dashboard")
+def dashboard():
+
+    df = load_dataframe()
+
+    anomalies = anomaly_records()
+
+    total_projects = int(len(df))
+
+    total_allocation = float(
+        df["ALLOCATION_AMOUNT_NUM"].sum()
+    )
+
+    states = unique_values(
+        df,
+        "STATE"
+    )
+
+    categories = unique_values(
+        df,
+        "CATEGORY"
+    )
+
+    statuses = unique_values(
+        df,
+        "STATUS"
+    )
+
+    if "STATE" in df.columns:
+
+        state_counts = (
+            df["STATE"]
+            .fillna("Unknown")
+            .astype(str)
+            .value_counts()
+            .head(10)
+            .to_dict()
+        )
+
+    else:
+
+        state_counts = {}
+
+    if "CATEGORY" in df.columns:
+
+        category_counts = (
+            df["CATEGORY"]
+            .fillna("Unknown")
+            .astype(str)
+            .value_counts()
+            .head(10)
+            .to_dict()
+        )
+
+    else:
+
+        category_counts = {}
+
+    if "STATUS" in df.columns:
+
+        status_counts = (
+            df["STATUS"]
+            .fillna("Unknown")
+            .astype(str)
+            .value_counts()
+            .head(10)
+            .to_dict()
+        )
+
+    else:
+
+        status_counts = {}
+
+    repeated = sum(
+        1
+        for item in anomalies
+        if item.get(
+            "anomaly_type"
+        ) == "repeated_amount_pattern"
+    )
+
+    extreme = sum(
+        1
+        for item in anomalies
+        if item.get(
+            "anomaly_type"
+        ) == "extreme_allocation"
+    )
+
+    return jsonable({
+
+        "total_projects":
+            total_projects,
+
+        "total_allocation":
+            total_allocation,
+
+        "total_anomalies":
+            len(anomalies),
+
+        "detection_types":
+            2,
+
+        "states":
+            len(states),
+
+        "categories":
+            len(categories),
+
+        "statuses":
+            len(statuses),
+
+        "state_counts":
+            state_counts,
+
+        "category_counts":
+            category_counts,
+
+        "status_counts":
+            status_counts,
+
+        "repeated_patterns":
+            repeated,
+
+        "extreme_allocations":
+            extreme,
+    })
+
+
+# ============================================================
+# PROJECTS
+# ============================================================
+
+@app.get("/api/v1/works")
+def works(
+
+    limit: int = Query(
+        25,
+        ge=1,
+        le=200
+    ),
+
+    offset: int = Query(
+        0,
+        ge=0
+    ),
+
+    search: str = Query(
+        "",
+        alias="search"
+    ),
+
+    state: str = "",
+
+    category: str = "",
+
+    status: str = "",
+):
+
+    df = load_dataframe().copy()
+
+    # ----------------------------
+    # SEARCH
+    # ----------------------------
+
+    if search.strip():
+
+        query = search.strip().lower()
+
+        mask = pd.Series(
+            False,
+            index=df.index
+        )
+
+        for column in [
+            "MP NAME",
+            "WORK",
+            "CONSTITUENCY",
+            "CITY",
+            "PROJECT_ID",
+        ]:
+
+            if column in df.columns:
+
+                mask = (
+                    mask
+                    |
+                    df[column]
+                    .fillna("")
+                    .astype(str)
+                    .str.lower()
+                    .str.contains(
+                        query,
+                        regex=False
+                    )
+                )
+
+        df = df[mask]
+
+    # ----------------------------
+    # FILTERS
+    # ----------------------------
+
+    if state and state != "All":
+
+        df = df[
+            df["STATE"]
+            .fillna("")
+            .astype(str)
+            == state
+        ]
+
+    if category and category != "All":
+
+        df = df[
+            df["CATEGORY"]
+            .fillna("")
+            .astype(str)
+            == category
+        ]
+
+    if status and status != "All":
+
+        df = df[
+            df["STATUS"]
+            .fillna("")
+            .astype(str)
+            == status
+        ]
+
+    total = int(len(df))
+
+    page = df.iloc[
+        offset:offset + limit
+    ].copy()
+
+    items = page.to_dict(
+        orient="records"
+    )
+
+    return jsonable({
+
+        "total":
+            total,
+
+        "limit":
+            limit,
+
+        "offset":
+            offset,
+
+        "items":
+            items,
+    })
+
+
+# ============================================================
+# FILTERS
+# ============================================================
+
+@app.get("/api/v1/filters")
+def filters():
+
+    df = load_dataframe()
+
+    return jsonable({
+
+        "states":
+            unique_values(
+                df,
+                "STATE"
+            ),
+
+        "categories":
+            unique_values(
+                df,
+                "CATEGORY"
+            ),
+
+        "statuses":
+            unique_values(
+                df,
+                "STATUS"
+            ),
+    })
+
+
+# ============================================================
+# ANOMALY SUMMARY
+# ============================================================
+
+@app.get("/api/v1/anomalies/summary")
+def anomaly_summary():
+
+    anomalies = anomaly_records()
+
+    repeated = [
+        item
+        for item in anomalies
+        if item.get(
+            "anomaly_type"
+        ) == "repeated_amount_pattern"
+    ]
+
+    extreme = [
+        item
+        for item in anomalies
+        if item.get(
+            "anomaly_type"
+        ) == "extreme_allocation"
+    ]
+
+    scores = [
+
+        float(
+            item.get(
+                "pattern_score"
+            )
+        )
+
+        for item in repeated
+
+        if item.get(
+            "pattern_score"
+        ) is not None
+    ]
+
+    return jsonable({
+
+        "total":
+            len(anomalies),
+
+        "total_anomalies":
+            len(anomalies),
+
+        "repeated_patterns":
+            len(repeated),
+
+        "repeated_amount_patterns":
+            len(repeated),
+
+        "extreme_allocations":
+            len(extreme),
+
+        "extreme_allocation":
+            len(extreme),
+
+        "max_pattern_score":
+            max(scores)
+            if scores
+            else 0,
+    })
+
+
+# ============================================================
+# ANOMALIES
+# ============================================================
+
+@app.get("/api/v1/anomalies")
+def anomalies(
+
+    limit: int = Query(
+        50,
+        ge=1,
+        le=200
+    ),
+
+    offset: int = Query(
+        0,
+        ge=0
+    ),
+
+    anomaly_type: str = "",
+
+    severity: str = "",
+):
+
+    records = list(
+        anomaly_records()
+    )
+
+    # ----------------------------
+    # TYPE FILTER
+    # ----------------------------
+
+    if (
+        anomaly_type
+        and anomaly_type != "All"
+    ):
+
+        records = [
+
+            item
+            for item in records
+
+            if item.get(
+                "anomaly_type"
+            ) == anomaly_type
+        ]
+
+    # ----------------------------
+    # SEVERITY FILTER
+    # ----------------------------
+
+    if (
+        severity
+        and severity != "All"
+    ):
+
+        records = [
+
+            item
+            for item in records
+
+            if item.get(
+                "severity"
+            ) == severity
+        ]
+
+    total = len(records)
+
+    page = records[
+        offset:offset + limit
+    ]
+
+    return jsonable({
+
+        "total":
+            total,
+
+        "limit":
+            limit,
+
+        "offset":
+            offset,
+
+        "items":
+            page,
+    })
+
+
+# ============================================================
+# REFRESH
+# ============================================================
+
+@app.post("/api/v1/refresh")
+def refresh():
+
+    load_dataframe.cache_clear()
+
+    anomaly_records.cache_clear()
+
+    df = load_dataframe()
+
+    anomalies = anomaly_records()
+
+    return {
+
+        "status":
+            "refreshed",
+
+        "projects":
+            len(df),
+
+        "anomalies":
+            len(anomalies),
     }
